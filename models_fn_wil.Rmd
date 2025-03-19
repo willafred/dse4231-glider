@@ -8,10 +8,10 @@ date: "2025-03-09"
 This file details the process of generation of the benchmark models (rLASSO and MADR) from the paper. This file can has 2 main chunks to note:
 
 (1) Functions involved to run the rLASSO, Adaptive LASSO, MADR and GLiDeR models are included here.
+(2) MC Simulation function is denoted by mc_simulation function to generate 100 different estimations of ATE
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-rm(list=ls())
 library(MASS) 
 library(glmnet) 
 library(mgcv) 
@@ -262,90 +262,82 @@ adaptive_lasso_model = function(dataframe){
 
 # Running of Models under different scenarios
 ```{r}
-model_df_generator = function(df_func, madr_bin = F){
-  initial_name = "df_scenario"
-  df_final = as.data.frame(matrix(nrow=0,ncol=5))
-  colnames(df_final) = c("scenario","num_var","selected_treatment","selected_outcome","ate_est")
-  for (scene_num in 1:13){
-    if (scene_num == 10){
-      # next
-      if (madr_bin == T){
-        next
+
+mc_simulation = function(df_func, num_params, num_params_scene10, madr_bin = F, total_sim){
+  df_final = data.frame(scenario = 1:13)
+  for (sim_num in 1:total_sim){ # number of simulations
+    scenarios_lst = overall_scenario_generator(num_params = num_params, num_params_scene10 = num_params_scene10)
+    ate_est_vec = c()
+    for (scene_num in 1:13){
+      if (scene_num == 10){
+        # next
+        if (madr_bin == T){
+          next
+        }
       }
-      var_num_lst = c(100, 500, 1000)
-    } else {
-      var_num_lst = c(5, 10, 25)
-    }
-    for (var_num in var_num_lst){
-      print(paste0("Scenario ",scene_num," with", var_num, " variables in progress..."))
-      scenario_name = paste0(initial_name,scene_num,"_p",var_num)
-      scenario_df = get(scenario_name)
+      print(paste0("Scenario ",scene_num," with ", num_params, " variables in progress..."))
+      scenario_name = paste0("scenario_", scene_num)
+      scenario_df = scenarios_lst[[scenario_name]]
       df_loop_lst = df_func(scenario_df)
-      final_vec = c(scene_num, var_num, df_loop_lst$treatment_var, df_loop_lst$outcome_var, df_loop_lst$ate_est)
-      row_to_add = as.data.frame(t(final_vec))  # Transpose to make it a single row
-      colnames(row_to_add) = colnames(df_final)
-      df_final = rbind(df_final, row_to_add)
+      ate_est_vec = c(ate_est_vec, df_loop_lst$ate_est)
     }
+    df_final[[paste0("sim_", sim_num)]] = ate_est_vec
   }
   return(df_final)
 }
 
-rlasso_df = model_df_generator(rlasso_model)
-glider_df = model_df_generator(glider_est)
-saturated_df = model_df_generator(saturated_model)
-adaptive_lasso_df = model_df_generator(adaptive_lasso_model)
-madr_df = model_df_generator(madr_estimator, madr_bin = T)
 
-save(rlasso_df, file = 'rlasso.rdata')
-save(glider_df, file = 'glider.rdata')
-save(saturated_df, file = 'saturated.rdata')
-save(adaptive_lasso_df, file = 'adaptive_lasso.rdata')
-save(madr_df, file = 'madr.rdata')
+rlasso_df = mc_simulation(rlasso_model, num_params = 5, num_params_scene10 = 100, total_sim = 100)
+saturated_df = mc_simulation(saturated_model, num_params = 5, num_params_scene10 = 100, total_sim = 100)
+adaptive_lasso_df = mc_simulation(adaptive_lasso_model, num_params = 5, num_params_scene10 = 100, total_sim = 100)
+glider_df = mc_simulation(glider_est, num_params = 5, num_params_scene10 = 100, total_sim = 100)
+madr_df = mc_simulation(madr_estimator, num_params = 5, num_params_scene10 = 100, madr_bin = T, total_sim = 100)
+
 ```
 
-# Computation of Error
+# Computation of Error (old)
 Files saved as "(model_name)_new.rdata"
 ```{r}
-models = c('rlasso','glider','saturated','adaptive_lasso','madr')
-for (model_name in models){
-  model_df = get(paste0(model_name,'_df'))
-  col_name = paste0('mse')
-  model_df$true_ate = 1
-  model_df$ate_est = as.numeric(model_df$ate_est)
-  model_df$true_ate = as.numeric(model_df$true_ate)
-  model_df[[col_name]] = abs(model_df$ate_est - model_df$true_ate)^2
-  new_file = paste0(model_name,'_new.rdata')
-  assign(paste0(model_name,'_df'), model_df)
-  save(list = paste0(model_name,'_df'), file = new_file)
-}
+# models = c('rlasso','glider','saturated','adaptive_lasso','madr')
+# for (model_name in models){
+#   model_df = get(paste0(model_name,'_df'))
+#   col_name = paste0('mse')
+#   model_df$true_ate = 1
+#   model_df$ate_est = as.numeric(model_df$ate_est)
+#   model_df$true_ate = as.numeric(model_df$true_ate)
+#   model_df[[col_name]] = abs(model_df$ate_est - model_df$true_ate)^2
+#   new_file = paste0(model_name,'_new.rdata')
+#   assign(paste0(model_name,'_df'), model_df)
+#   save(list = paste0(model_name,'_df'), file = new_file)
+# }
 
 ```
 
-# Computation of MSE Ratio
+# Computation of MSE Ratio (old)
 
 ```{r}
-models = c('rlasso','glider','saturated','adaptive_lasso','madr')
-for (model_name in models){
-  load(paste0(model_name,"_new.rdata"))
-}
-saturated_mse = saturated_df$mse
-saturated_mse_madr = (saturated_df %>% filter(scenario != 10))$mse
-
-mse_ratio_computation = function(df, saturated_mse){
-  df[['saturated_mse']] = saturated_mse
-  df = df %>% mutate(mse_ratio = saturated_mse / mse) %>% dplyr::select(scenario,num_var,mse_ratio)
-  return(df)
-}
-
-glider_mse_ratio = mse_ratio_computation(glider_df, saturated_mse) %>% rename('glider_mse_ratio' = 'mse_ratio')
-rlasso_mse_ratio = mse_ratio_computation(rlasso_df, saturated_mse) %>% rename('rlasso_mse_ratio' = 'mse_ratio')
-adaptive_lasso_mse_ratio = mse_ratio_computation(adaptive_lasso_df, saturated_mse) %>% rename('adaptive_lasso_mse_ratio' = 'mse_ratio')
-madr_mse_ratio = mse_ratio_computation(madr_df, saturated_mse_madr) %>% rename('madr_mse_ratio' = 'mse_ratio')
-
-
-combined_df = glider_mse_ratio %>%
-  left_join(rlasso_mse_ratio, by = c("scenario","num_var")) %>%
-  left_join(adaptive_lasso_mse_ratio, by = c("scenario","num_var")) %>%
-  left_join((madr_mse_ratio%>% mutate(scenario = as.character(scenario),num_var = as.character(num_var))), by = c("scenario","num_var"))
+# models = c('rlasso','glider','saturated','adaptive_lasso','madr')
+# for (model_name in models){
+#   load(paste0(model_name,"_new.rdata"))
+# }
+# saturated_mse = saturated_df$mse
+# saturated_mse_madr = (saturated_df %>% filter(scenario != 10))$mse
+# 
+# mse_ratio_computation = function(df, saturated_mse){
+#   df[['saturated_mse']] = saturated_mse
+#   df = df %>% mutate(mse_ratio = saturated_mse / mse) %>% dplyr::select(scenario,num_var,mse_ratio)
+#   return(df)
+# }
+# 
+# glider_mse_ratio = mse_ratio_computation(glider_df, saturated_mse) %>% rename('glider_mse_ratio' = 'mse_ratio')
+# rlasso_mse_ratio = mse_ratio_computation(rlasso_df, saturated_mse) %>% rename('rlasso_mse_ratio' = 'mse_ratio')
+# adaptive_lasso_mse_ratio = mse_ratio_computation(adaptive_lasso_df, saturated_mse) %>% rename('adaptive_lasso_mse_ratio' = 'mse_ratio')
+# madr_mse_ratio = mse_ratio_computation(madr_df, saturated_mse_madr) %>% rename('madr_mse_ratio' = 'mse_ratio')
+# 
+# 
+# combined_df = glider_mse_ratio %>%
+#   left_join(rlasso_mse_ratio, by = c("scenario","num_var")) %>%
+#   left_join(adaptive_lasso_mse_ratio, by = c("scenario","num_var")) %>%
+#   left_join((madr_mse_ratio%>% mutate(scenario = as.character(scenario),num_var = as.character(num_var))), by = c("scenario","num_var"))
   
 ```

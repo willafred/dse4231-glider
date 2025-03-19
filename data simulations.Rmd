@@ -17,7 +17,9 @@ library(tidyverse)
 ```
 
 # Overall function to generate dataframe
+
 ```{r}
+
 df_generator = function(n, p, sigma, treatment_eqn, outcome_eqn) {
   # Generate covariates
   Xorig = matrix(rnorm(n * p, mean = 1, sd = sigma), n, p)
@@ -41,9 +43,7 @@ df_generator = function(n, p, sigma, treatment_eqn, outcome_eqn) {
     dplyr::select(outcome, treatment, starts_with("X"))  # Ensure correct column order
   return(final_df)
 }
-```
 
-```{r}
 overall_scenario_generator = function(num_params, num_params_scene10){
   # --- ## SCENARIO 1 ## ---
   treatment_eqn = function(X) {
