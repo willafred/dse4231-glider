@@ -1,0 +1,351 @@
+---
+title: "MADR_rlasso"
+output: html_document
+date: "2025-03-09"
+---
+
+# Description of coding file
+This file details the process of generation of the benchmark models (rLASSO and MADR) from the paper. This file can has 2 main chunks to note:
+
+(1) Functions involved to run the rLASSO, Adaptive LASSO, MADR and GLiDeR models are included here.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list=ls())
+library(MASS) 
+library(glmnet) 
+library(mgcv) 
+library(boot)
+library(randomForest)
+library(hdm)
+library(glmnet)
+library(caret)
+library(tidyverse)
+
+component_splitter = function(df){
+  treatment = df$treatment
+  outcome = df$outcome
+  X_df = as.matrix(df %>% dplyr::select(-c(treatment, outcome)))
+  return(list(treatment = treatment, outcome = outcome, X_df = X_df))
+}
+
+```
+
+## Method 1: Regularized LASSO
+
+```{r}
+# ----- ## MODEL 1: SATURATED MODEL ## -----
+
+saturated_model = function(dataframe){
+  D = component_splitter(dataframe)[['treatment']]   # Treatment variable (D)
+  X = component_splitter(dataframe)[['X_df']]        # Covariates (X)
+  Y = component_splitter(dataframe)[['outcome']]     # Outcome variable (Y)
+  
+  # STEP 1: Fit the treatment model (propensity score estimation)
+  treatment_model = glm(D ~ X, data = dataframe, family = binomial)
+  pi_hat = predict(treatment_model, type = "response", newdata = dataframe)  # Propensity scores π(V;γ)
+  
+  # STEP 2: Fit outcome models separately for treated and control groups
+  outcome_model_treat = lm(outcome ~ ., data = dataframe[D == 1, ])  # μ(1, X)
+  outcome_model_control = lm(outcome ~ ., data = dataframe[D == 0, ]) # μ(0, X)
+  
+  mu_hat_1 = predict(outcome_model_treat, newdata = dataframe)  
+  mu_hat_0 = predict(outcome_model_control, newdata = dataframe)  
+  # STEP 3: Compute the doubly robust estimator
+  n = nrow(dataframe)
+  
+  # Formula in paper
+  dr_estimate = mean(((D * Y) / pi_hat) - ((1 - D) * Y / (1 - pi_hat)) - 
+                       ((D - pi_hat) / pi_hat) * mu_hat_1 - 
+                       ((D - pi_hat) / (1 - pi_hat)) * mu_hat_0)
+  final_lst = list(ate_est = dr_estimate, 
+                   treatment_var = NA,
+                   outcome_var = NA)
+  return(final_lst)
+}
+
+#----## MODEL 2: REGULARISED LASSO ## ------
+
+rlasso_model = function(dataframe){
+  D = component_splitter(dataframe)[['treatment']]   # Treatment variable (D)
+  X = component_splitter(dataframe)[['X_df']]        # Covariates (X)
+  Y = component_splitter(dataframe)[['outcome']]     # Outcome variable (Y)
+  
+  ## Step 1: Standardising Outcome and X before variable selection ##
+  Xstand = t(t(X - matrix(rep(apply(X, 2, mean), nrow(X)), nrow(X), byrow = TRUE)) *
+              (1 / apply(X, 2, sd)))
+  Ystand = Y / sd(Y)
+  
+  ## Step 2: Use rlasso to select covariates for both treatment (propensity score) and outcome models ##
+  # 2a: Propensity score model (D ~ X)
+  ps_model = rlasso(D ~ Xstand, post = TRUE)
+  ps_selected_covariates = coef(ps_model)  # Get the selected covariates for the treatment model
+  selected_ps_covariates = ps_selected_covariates[ps_selected_covariates != 0]
+  selected_ps_covariate_names = names(selected_ps_covariates)
+  # Remove intercept
+  selected_ps_covariate_names = selected_ps_covariate_names[selected_ps_covariate_names != "(Intercept)"]  
+  
+  # 2b: Outcome model (Y ~ X + D)
+  outcome_model = rlasso(Ystand ~ Xstand + D, post = TRUE)
+  outcome_selected_covariates = coef(outcome_model)  # Get the selected covariates for the outcome model
+  selected_outcome_covariates = outcome_selected_covariates[outcome_selected_covariates != 0]
+  selected_outcome_covariate_names = names(selected_outcome_covariates)
+  
+  ## Step 3: Estimate the Propensity Scores (Phat) using the propensity score model ##
+  selected_outcome_covariate_names = gsub("Xstand", "", selected_outcome_covariate_names)  # Remove "Xstand"
+  selected_outcome_covariate_names = selected_outcome_covariate_names[!(selected_outcome_covariate_names %in% c("(Intercept)", "D"))]
+
+  # Extract coefficients for the treatment model
+  beta_trt = ps_selected_covariates[-1]  # Exclude the intercept term
+  intercept_trt = ps_selected_covariates[1]  # Intercept for the treatment model
+  
+  # Compute propensity scores with logistic model
+  Phat = exp(intercept_trt + Xstand %*% beta_trt) / (1 + exp(intercept_trt + Xstand %*% beta_trt))
+  
+  ## Step 4: Estimate the Outcome Model predictions (Yhat0 and Yhat1) ##
+  
+  # Extract of coefficients for outcome model
+  beta_outcome = outcome_selected_covariates[-1]  # Exclude the intercept term
+  beta_outcome = beta_outcome[-which(names(beta_outcome) == "D")] # Remove D from beta vector
+
+  intercept_outcome = outcome_selected_covariates[1]  # Intercept for the outcome model
+  beta_a = outcome_selected_covariates[length(outcome_selected_covariates)]  # Treatment effect coefficient
+  
+  # Predicted outcomes for no treatment (Yhat0) and treatment (Yhat1)
+  Yhat0 = (rep(intercept_outcome, nrow(Xstand)) + Xstand %*% beta_outcome) * sd(Y)  # Yhat0 for no treatment
+  Yhat1 = (rep(intercept_outcome, nrow(Xstand)) + beta_a + Xstand %*% beta_outcome) * sd(Y)  # Yhat1 for treatment
+  
+  ## Step 5: Calculate the Counterfactual Outcomes (DR Estimator) ##
+  muhat1 = (D * Y / Phat) - ((D - Phat) / Phat) * Yhat1
+  muhat0 = (((1 - D) * Y) / (1 - Phat)) + (((D - Phat) / (1 - Phat)) * Yhat0)
+  
+  ## Step 6: Compute the Doubly Robust Estimator for the Average Treatment Effect (ATE), and show the number of variables that have been selected ##
+  drest = mean(muhat1 - muhat0)
+  final_lst = list(ate_est = drest, 
+                   treatment_var = paste(selected_ps_covariate_names, collapse = ", "),
+                   outcome_var = paste(selected_outcome_covariate_names, collapse = ", "))
+  return(final_lst)
+}
+
+#----- ## MODEL 3: MADR MODEL BY CEFALU (2016) ## -----
+
+madr_estimator = function(dataframe) {
+  
+  D = component_splitter(dataframe)[['treatment']]   # Treatment variable (D)
+  X = component_splitter(dataframe)[['X_df']]        # Covariates (X)
+  Y = component_splitter(dataframe)[['outcome']]     # Outcome variable (Y)
+  X_standardized = scale(X)
+  
+  # Step 1: Fit treatment models (logit and probit) for propensity score estimation
+  logit_model = glm(D ~ X_standardized, family = binomial(link = "logit"))
+  probit_model = glm(D ~ X_standardized, family = binomial(link = "probit"))
+  print('fitted')
+  # Propensity scores from both models
+  ps_logit = predict(logit_model, type = "response")  # Propensity scores from logit
+  ps_probit = predict(probit_model, type = "response") # Propensity scores from probit
+  
+  df_stan = as.data.frame(cbind(Y, X_standardized, D))
+
+  # Step 2: Fit outcome models (GAM and Linear regression) for treated and control groups
+  lm_model_treated = lm(Y~., data = df_stan, subset = (D == 1))  # Linear for treated
+  lm_model_untreated = lm(Y~., data = df_stan, subset = (D == 0))  # Linear for untreated
+  
+  rf_model_treated = randomForest(Y~., data = df_stan, subset = (D == 1)) # RF regression for outcome
+  rf_model_untreated = randomForest(Y~., data = df_stan, subset = (D == 0)) # RF regression for outcome
+  print("models fitted")
+  
+  # Predictions for outcome models
+  lm_predictions_treated = predict(lm_model_treated, type = "response", newdata = df_stan, method = "ML")
+  lm_predictions_untreated = predict(lm_model_untreated, type = "response", newdata = df_stan, method = "ML")
+  
+  rf_predictions_treated = predict(rf_model_treated, type = "response", newdata = df_stan)
+  rf_predictions_untreated = predict(rf_model_untreated, type = "response", newdata = df_stan)
+  
+  compute_double_robust = function(Y, D, e, m1, m0) {
+    # Y: Observed outcomes
+    # D: Treatment indicator (0 or 1)
+    # e: Estimated propensity score (probability of treatment)
+    # m1: Estimated outcome for treated group (X = 1)
+    # m0: Estimated outcome for control group (X = 0)
+    
+    # Calculate the double robust estimator
+    
+    dr_estimate = mean(((D * Y) / e) - ((1 - D) * Y / (1 - e)) - 
+                       ((D - e) / e) * m1 - 
+                       ((D - e) / (1 - e)) * m0)
+    return(dr_estimate)
+  }
+  
+  ate_rf_logit = compute_double_robust(Y, D, ps_logit, 
+                                        rf_predictions_treated, rf_predictions_untreated)
+  
+  ate_gam_logit = compute_double_robust(Y, D, ps_logit, 
+                                        lm_predictions_treated, gam_predictions_untreated)
+  
+  ate_rf_probit = compute_double_robust(Y, D, ps_probit, 
+                                        rf_predictions_treated, rf_predictions_untreated)
+  
+  ate_gam_probit = compute_double_robust(Y, D, ps_probit, 
+                                        lm_predictions_treated, gam_predictions_untreated)
+  # Averaging the ATEs from both treatment models (logit and probit)
+  ate_madr = (ate_gam_logit + ate_rf_logit + ate_gam_probit + ate_rf_probit) / 4
+
+  return(list(ate_est = ate_madr, 
+              treatment_var = NA,
+              outcome_var = NA))
+}
+
+#----- ## MODEL 4: GLIDER FUNCTION ## -----
+
+glider_est = function(dataframe){
+  D = component_splitter(dataframe)[['treatment']]   # Treatment variable (D)
+  X = component_splitter(dataframe)[['X_df']]        # Covariates (X)
+  Y = component_splitter(dataframe)[['outcome']]     # Outcome variable (Y)
+  params = GLiDeR(X, Y, D, lambda = NULL)
+  alpha_indices = which(params$alpha != 0)
+  gamma_indices = which(params$gamma != 0)
+  # Add "X" to each index number and join them with ", "
+  treatment_var = paste0("X", alpha_indices, collapse = ", ")
+  outcome_var = paste0("X", gamma_indices, collapse = ", ")
+  
+  # Create the final list
+  result_list = list(
+    ate_est = params$delta,
+    treatment_var = treatment_var,
+    outcome_var = outcome_var
+  )
+  return(result_list)
+}
+
+# ----- ## MODEL 5: ADAPTIVE LASSO ## -----
+
+adaptive_lasso_model = function(dataframe){
+  D = component_splitter(dataframe)[['treatment']]   # Treatment variable (D)
+  X = component_splitter(dataframe)[['X_df']]        # Covariates (X)
+  Y = component_splitter(dataframe)[['outcome']]     # Outcome variable (Y)
+  
+  ## STEP 1: Generation of initial estimates of the coefficients
+  ols_model = lm(Y ~ X)  # Fit OLS model
+  beta_ols = coef(ols_model)[-1]  # Exclude intercept
+  weights = 1 / abs(beta_ols)  # Adaptive weights
+  weights[is.infinite(weights)] = max(weights[is.finite(weights)])  # Avoid Inf
+  weights[is.na(weights)] = min(weights[is.finite(weights)])  # Avoid Inf
+  cvfit = cv.glmnet(X, Y, alpha = 1, penalty.factor = weights, nfolds = 10)
+  
+  # Extraction of the best lambda
+  lambda_opt = cvfit$lambda.min
+  
+  ## STEP 2: Selection of variables based on algorithm ##
+  # Fit final model using best lambda
+  adaptive_lasso = glmnet(X, Y, alpha = 1, lambda = lambda_opt, penalty.factor = weights)
+  selected_covariates = which(coef(adaptive_lasso)[-1] != 0)  # Exclude intercept
+
+  ## Step 3: Directly extract ATE ##
+  
+  X_selected = X[, selected_covariates, drop = FALSE]  # Keep only selected variables
+  if (length(selected_covariates) == 0) {
+    # No covariates selected, use only D in the final model
+    final_model = lm(Y ~ D)
+  } else {
+    X_selected = X[, selected_covariates, drop = FALSE]  # Keep only selected variables
+    final_model = lm(Y ~ D + X_selected)  # Refit outcome model
+  }
+  
+  ate_est = coef(final_model)["D"]
+  joined_covariates = paste(paste0("X", selected_covariates), collapse = ", ")
+  return(list(ate_est = ate_est, 
+              treatment_var = NA,
+              outcome_var = joined_covariates))
+}
+
+```
+
+# Running of Models under different scenarios
+```{r}
+model_df_generator = function(df_func, madr_bin = F){
+  initial_name = "df_scenario"
+  df_final = as.data.frame(matrix(nrow=0,ncol=5))
+  colnames(df_final) = c("scenario","num_var","selected_treatment","selected_outcome","ate_est")
+  for (scene_num in 1:13){
+    if (scene_num == 10){
+      # next
+      if (madr_bin == T){
+        next
+      }
+      var_num_lst = c(100, 500, 1000)
+    } else {
+      var_num_lst = c(5, 10, 25)
+    }
+    for (var_num in var_num_lst){
+      print(paste0("Scenario ",scene_num," with", var_num, " variables in progress..."))
+      scenario_name = paste0(initial_name,scene_num,"_p",var_num)
+      scenario_df = get(scenario_name)
+      df_loop_lst = df_func(scenario_df)
+      final_vec = c(scene_num, var_num, df_loop_lst$treatment_var, df_loop_lst$outcome_var, df_loop_lst$ate_est)
+      row_to_add = as.data.frame(t(final_vec))  # Transpose to make it a single row
+      colnames(row_to_add) = colnames(df_final)
+      df_final = rbind(df_final, row_to_add)
+    }
+  }
+  return(df_final)
+}
+
+rlasso_df = model_df_generator(rlasso_model)
+glider_df = model_df_generator(glider_est)
+saturated_df = model_df_generator(saturated_model)
+adaptive_lasso_df = model_df_generator(adaptive_lasso_model)
+madr_df = model_df_generator(madr_estimator, madr_bin = T)
+
+save(rlasso_df, file = 'rlasso.rdata')
+save(glider_df, file = 'glider.rdata')
+save(saturated_df, file = 'saturated.rdata')
+save(adaptive_lasso_df, file = 'adaptive_lasso.rdata')
+save(madr_df, file = 'madr.rdata')
+```
+
+# Computation of Error
+Files saved as "(model_name)_new.rdata"
+```{r}
+models = c('rlasso','glider','saturated','adaptive_lasso','madr')
+for (model_name in models){
+  model_df = get(paste0(model_name,'_df'))
+  col_name = paste0('mse')
+  model_df$true_ate = 1
+  model_df$ate_est = as.numeric(model_df$ate_est)
+  model_df$true_ate = as.numeric(model_df$true_ate)
+  model_df[[col_name]] = abs(model_df$ate_est - model_df$true_ate)^2
+  new_file = paste0(model_name,'_new.rdata')
+  assign(paste0(model_name,'_df'), model_df)
+  save(list = paste0(model_name,'_df'), file = new_file)
+}
+
+```
+
+# Computation of MSE Ratio
+
+```{r}
+models = c('rlasso','glider','saturated','adaptive_lasso','madr')
+for (model_name in models){
+  load(paste0(model_name,"_new.rdata"))
+}
+saturated_mse = saturated_df$mse
+saturated_mse_madr = (saturated_df %>% filter(scenario != 10))$mse
+
+mse_ratio_computation = function(df, saturated_mse){
+  df[['saturated_mse']] = saturated_mse
+  df = df %>% mutate(mse_ratio = saturated_mse / mse) %>% dplyr::select(scenario,num_var,mse_ratio)
+  return(df)
+}
+
+glider_mse_ratio = mse_ratio_computation(glider_df, saturated_mse) %>% rename('glider_mse_ratio' = 'mse_ratio')
+rlasso_mse_ratio = mse_ratio_computation(rlasso_df, saturated_mse) %>% rename('rlasso_mse_ratio' = 'mse_ratio')
+adaptive_lasso_mse_ratio = mse_ratio_computation(adaptive_lasso_df, saturated_mse) %>% rename('adaptive_lasso_mse_ratio' = 'mse_ratio')
+madr_mse_ratio = mse_ratio_computation(madr_df, saturated_mse_madr) %>% rename('madr_mse_ratio' = 'mse_ratio')
+
+
+combined_df = glider_mse_ratio %>%
+  left_join(rlasso_mse_ratio, by = c("scenario","num_var")) %>%
+  left_join(adaptive_lasso_mse_ratio, by = c("scenario","num_var")) %>%
+  left_join((madr_mse_ratio%>% mutate(scenario = as.character(scenario),num_var = as.character(num_var))), by = c("scenario","num_var"))
+  
+```
