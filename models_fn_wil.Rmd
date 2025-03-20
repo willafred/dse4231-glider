@@ -583,7 +583,7 @@ for (model_name in models){
   model_df_func = get(paste0(model_name, '_model'))
   
   # Always skip scenario 10 for backward_selection
-  if(model_name == 'backward_selection') {
+  if(model_name == 'backward_selection' | model_name == "madr") {
     model_df = mc_simulation_parallel(model_df_func, 
                                      num_params = num_params, 
                                      num_params_scene10 = num_params_scene10, 
@@ -598,8 +598,8 @@ for (model_name in models){
   }
   # Save results
   new_file = paste0(model_name, '_df_', num_params, 'var_', num_sim,'.rdata')
-  assign(paste0(model_name, '_df_', num_params, 'var_', num_sim,'_df_1000'), model_df)
-  save(list = paste0(model_name, '_df_', num_params, 'var_', num_sim,'_df_1000'), file = new_file)
+  assign(paste0(model_name, '_df_', num_params, 'var_', num_sim), model_df)
+  save(list = paste0(model_name, '_df_', num_params, 'var_', num_sim), file = new_file)
   
   if (model_name == models[length(models)]){
     print("All Models Done!")
@@ -609,79 +609,96 @@ for (model_name in models){
 }
 
 stopCluster(cl)
-
-# ## --- NON-PARALLEL VERSION --- ##
-
-# mc_simulation = function(df_func, num_params, num_params_scene10, madr_bin = F, total_sim){
-#   df_final = data.frame(scenario = 1:13)
-#   if (madr_bin == T){
-#     df_final = df_final %>% filter(scenario!=10)
-#   }
-#   for (sim_num in 1:total_sim){ # number of simulations
-#     scenarios_lst = overall_scenario_generator(num_params = num_params, num_params_scene10 = num_params_scene10)
-#     ate_est_vec = c()
-#     for (scene_num in 1:13){
-#       if (scene_num == 10){
-#         # next
-#         if (madr_bin == T){
-#           next
-#         }
-#       }
-#       print(paste0("Scenario ",scene_num," with ", num_params, " variables in progress..."))
-#       scenario_name = paste0("scenario_", scene_num)
-#       scenario_df = scenarios_lst[[scenario_name]]
-#       df_loop_lst = df_func(scenario_df)
-#       ate_est_vec = c(ate_est_vec, df_loop_lst$ate_est)
-#     }
-#     df_final[[paste0("sim_", sim_num)]] = ate_est_vec
-#   }
-#   return(df_final)
-# }
 ```
 
-# Computation of Error (old)
-Files saved as "(model_name)_new.rdata"
-```{r}
-# models = c('rlasso','glider','saturated','adaptive_lasso','madr')
-# for (model_name in models){
-#   model_df = get(paste0(model_name,'_df'))
-#   col_name = paste0('mse')
-#   model_df$true_ate = 1
-#   model_df$ate_est = as.numeric(model_df$ate_est)
-#   model_df$true_ate = as.numeric(model_df$true_ate)
-#   model_df[[col_name]] = abs(model_df$ate_est - model_df$true_ate)^2
-#   new_file = paste0(model_name,'_new.rdata')
-#   assign(paste0(model_name,'_df'), model_df)
-#   save(list = paste0(model_name,'_df'), file = new_file)
-# }
 
+# Combination of Functions into a single list object
+In this object, each element is labelled by its name. Each element is a dataframe consisting of the scenario number, and the 1000 simulated ATE computations obtained from the model itself.
+
+```{r}
+models = c('saturated', 'rlasso', 'glider', 'adaptive_lasso', 'madr', 'backward_selection', 'sis_lasso')
+overall_var5_simulations_results = list()
+for (model_name in models){
+  load(paste0(model_name,"_df_5var_1000.rdata"))
+  overall_var5_simulations_results[[model_name]] = get(paste0(model_name,"_df_5var_1000"))
+}
+
+save(overall_var5_simulations_results, file = "overall_var5_simulations_results.rdata")
 ```
 
-# Computation of MSE Ratio (old)
+# Processing of results
+Results are saved in a list object, and each element is denoted by its model name. 
+
+For each model in the list, the following are shown:
+1) Scenario Number
+2) MC Bias
+3) MC SD
+4) Model MSE
+5) Saturated Model MSE
+6) MSE Ratio
 
 ```{r}
-# models = c('rlasso','glider','saturated','adaptive_lasso','madr')
-# for (model_name in models){
-#   load(paste0(model_name,"_new.rdata"))
-# }
-# saturated_mse = saturated_df$mse
-# saturated_mse_madr = (saturated_df %>% filter(scenario != 10))$mse
-# 
-# mse_ratio_computation = function(df, saturated_mse){
-#   df[['saturated_mse']] = saturated_mse
-#   df = df %>% mutate(mse_ratio = saturated_mse / mse) %>% dplyr::select(scenario,num_var,mse_ratio)
-#   return(df)
-# }
-# 
-# glider_mse_ratio = mse_ratio_computation(glider_df, saturated_mse) %>% rename('glider_mse_ratio' = 'mse_ratio')
-# rlasso_mse_ratio = mse_ratio_computation(rlasso_df, saturated_mse) %>% rename('rlasso_mse_ratio' = 'mse_ratio')
-# adaptive_lasso_mse_ratio = mse_ratio_computation(adaptive_lasso_df, saturated_mse) %>% rename('adaptive_lasso_mse_ratio' = 'mse_ratio')
-# madr_mse_ratio = mse_ratio_computation(madr_df, saturated_mse_madr) %>% rename('madr_mse_ratio' = 'mse_ratio')
-# 
-# 
-# combined_df = glider_mse_ratio %>%
-#   left_join(rlasso_mse_ratio, by = c("scenario","num_var")) %>%
-#   left_join(adaptive_lasso_mse_ratio, by = c("scenario","num_var")) %>%
-#   left_join((madr_mse_ratio%>% mutate(scenario = as.character(scenario),num_var = as.character(num_var))), by = c("scenario","num_var"))
+results_processor = function(df, model_name){
+  bias_name = paste0(model_name, "_bias_mc")
+  sd_name = paste0(model_name, "_sd_mc")
+  mse_name = paste0(model_name, "_mse_mc")
+  df = df %>%
+    mutate(
+      across(starts_with("sim"), ~ case_when(
+        . > 100  ~ 100,  # Replace large positive values
+        . < -100 ~ -100, # Replace large negative values
+        TRUE    ~ .  # Keep values within the range
+      ))) %>%
+    ungroup()
+  df[[bias_name]] = rowMeans(select(df, starts_with("sim")), na.rm = TRUE) - 1
+  df[[sd_name]] = apply(select(df, starts_with("sim")), 1, sd, na.rm = TRUE)
+  df[[mse_name]] = rowMeans((select(df, starts_with("sim")) - 1)^2, na.rm = TRUE)
+  df = df %>% select(scenario, bias_name, sd_name, mse_name)
+  return(df)
+}
+
+# --- GENERATION OF MC BIAS, MC SD, MC MSE BASED ON ATE --- #
+
+num_var = 5
+num_sim = 1000
+models = c('saturated', 'rlasso', 'glider', 'adaptive_lasso', 'madr', 'backward_selection', 'sis_lasso')
+load("overall_var5_simulations_results.rdata")
+
+# Store processed results in a list
+mc_ratio_var5_sim1000 = list()
+
+# Process the models
+for (model_name in models) {
   
+  # Generation of MSE, MC bias, MC SD, MSE (for model itself)
+  model_df = overall_var5_simulations_results[[model_name]]
+  new_df = results_processor(model_df, model_name)
+  new_name = paste0(model_name, "_processed_", num_var, "var_", num_sim)
+  assign(new_name, new_df)
+  
+  # Retrieve saturated model for MC ratio computation
+  saturated_mse = get("saturated_processed_5var_1000") %>% select(scenario, saturated_mse_mc)
+  saturated_mse_noscene10 = get("saturated_processed_5var_1000") %>% filter(scenario != 10) %>% select(scenario, saturated_mse_mc)
+  
+  # For saturated models (those with MSE computations)
+  if (model_name != "saturated") {
+    mse_col_name = paste0(model_name, "_mse_mc")
+    
+    # Choose correct saturated dataset based on model type
+    saturated_data = if (model_name %in% c("madr", "backward_selection")) {
+      saturated_mse_noscene10
+    } else {
+      saturated_mse
+    }
+    
+    # Process data to compute MSE ratio and store in processed_data
+    mc_ratio_var5_sim1000[[model_name]] = get(new_name) %>%
+      left_join(saturated_data, by = "scenario") %>%
+      mutate(mse_ratio = saturated_mse_mc / .data[[mse_col_name]])
+  }
+}
+
+# Save the entire processed_data list (if needed)
+save(mc_ratio_var5_sim1000, file = "mc_ratio_var5_sim1000.rdata")
+
 ```
