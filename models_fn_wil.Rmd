@@ -269,7 +269,132 @@ adaptive_lasso_model = function(dataframe){
               outcome_var = joined_covariates))
 }
 
+# ----- ## MODEL 6: BACKWARD SELECTION ## -----
+
+backward_selection_model = function(dataframe){
+  D = component_splitter(dataframe)[['treatment']]   # Treatment variable (D)
+  X = component_splitter(dataframe)[['X_df']]        # Covariates (X)
+  Y = component_splitter(dataframe)[['outcome']]     # Outcome variable (Y)
+  
+  # Create dataframes for modeling
+  treat_df = dataframe[D == 1, ]
+  control_df = dataframe[D == 0, ]
+  
+  # STEP 1: Backward selection for treatment model
+  # Start with full model
+  full_treatment_model = glm(treatment ~ ., data = dataframe %>% dplyr::select(-outcome), family = binomial)
+  
+  # Handle step with tryCatch to avoid AIC -infinity issues
+  treatment_model = tryCatch({
+    step(full_treatment_model, direction = "backward", trace = 0)
+  }, error = function(e) {
+    # If step fails, use the intercept-only model
+    message("Treatment model selection failed, using intercept-only model")
+    glm(treatment ~ 1, data = dataframe, family = binomial)
+  })
+  
+  # Record selected variables
+  treatment_formula = formula(treatment_model)
+  treatment_var = attr(terms(treatment_formula), "term.labels")
+  if(length(treatment_var) == 0) {
+    treatment_var = NA  # Handle case where no variables are selected
+  }
+  
+  # Get propensity scores
+  pi_hat = predict(treatment_model, type = "response", newdata = dataframe)
+  # Trim propensity scores to avoid extreme values
+  pi_hat = pmax(pmin(pi_hat, 0.99), 0.01)
+  
+  # STEP 2: Backward selection for outcome models
+  # Treated group
+  full_outcome_treat = lm(outcome ~ ., data = treat_df %>% dplyr::select(-treatment))
+  outcome_model_treat = tryCatch({
+    step(full_outcome_treat, direction = "backward", trace = 0)
+  }, error = function(e) {
+    message("Treated outcome model selection failed, using intercept-only model")
+    lm(outcome ~ 1, data = treat_df)
+  })
+  
+  # Control group
+  full_outcome_control = lm(outcome ~ ., data = control_df %>% dplyr::select(-treatment))
+  outcome_model_control = tryCatch({
+    step(full_outcome_control, direction = "backward", trace = 0)
+  }, error = function(e) {
+    message("Control outcome model selection failed, using intercept-only model")
+    lm(outcome ~ 1, data = control_df)
+  })
+  
+  # Record selected variables
+  outcome_formula_treat = formula(outcome_model_treat)
+  outcome_formula_control = formula(outcome_model_control)
+  outcome_var_treat = attr(terms(outcome_formula_treat), "term.labels")
+  outcome_var_control = attr(terms(outcome_formula_control), "term.labels")
+  
+  outcome_var = unique(c(outcome_var_treat, outcome_var_control))
+  if(length(outcome_var) == 0) {
+    outcome_var = NA  # Handle case where no variables are selected
+  }
+  
+  # Generate predictions
+  mu_hat_1 = predict(outcome_model_treat, newdata = dataframe)  
+  mu_hat_0 = predict(outcome_model_control, newdata = dataframe)
+
+  # Calculate doubly robust estimate
+  dr_estimate = mean(((D * Y) / pi_hat) - ((1 - D) * Y / (1 - pi_hat)) - 
+                    ((D - pi_hat) / pi_hat) * mu_hat_1 - 
+                    ((D - pi_hat) / (1 - pi_hat)) * mu_hat_0)
+  
+  # Return results
+  final_lst = list(ate_est = dr_estimate, 
+                   treatment_var = treatment_var,
+                   outcome_var = outcome_var)
+  return(final_lst)
+}
 ```
+
+
+# Testing backward selection
+```{r}
+# Test for backward selection only
+models = c('backward_selection')
+num_sim = 10  # Reduced for testing
+num_params = 5
+num_params_scene10 = 50  # This won't be used for backward_selection
+
+# Set up parallel processing
+library(parallel)
+library(doParallel)
+library(foreach)
+
+num_cores = detectCores() - 1
+cl = makeCluster(num_cores)
+registerDoParallel(cl)
+
+for (model_name in models){
+  model_df_func = get(paste0(model_name,'_model'))
+  
+  # Always set madr_bin = TRUE for backward_selection to skip scenario 10
+  model_df = mc_simulation_parallel(model_df_func, 
+                                   num_params = num_params, 
+                                   num_params_scene10 = num_params_scene10, 
+                                   madr_bin = TRUE,  # This will skip scenario 10
+                                   total_sim = num_sim)
+  
+  # Print a sample of the results to check
+  print(head(model_df))
+  
+  # Save results if everything looks good
+  new_file = paste0(model_name, '_df_', num_params, 'var_', num_sim,'.rdata')
+  assign(paste0(model_name, '_df_', num_params, 'var_', num_sim,'_df_', num_sim), model_df)
+  save(list = paste0(model_name, '_df_', num_params, 'var_', num_sim,'_df_', num_sim), file = new_file)
+  
+  print(paste0(model_name, " Done!"))
+}
+
+# Don't forget to stop the cluster when done
+stopCluster(cl)
+```
+
 
 # Running of Models under different scenarios
 ```{r}
@@ -319,14 +444,30 @@ mc_simulation_parallel = function(df_func, num_params, num_params_scene10, madr_
   return(df_final)
 }
 
-models = c('rlasso','saturated','glider','adaptive_lasso','madr')
+#models = c('rlasso','saturated','glider','adaptive_lasso','madr','backward_selection')
+models = c('backward_selection')
 num_sim = 1000
 num_params = 5
 num_params_scene10 = 1000
 
 for (model_name in models){
-  model_df_func = get(paste0(model_name,'_model'))
-  model_df = mc_simulation_parallel(model_df_func, num_params = num_params, num_params_scene10 = num_params_scene10, total_sim = 1000)
+  model_df_func = get(paste0(model_name, '_model'))
+  
+  # Always skip scenario 10 for backward_selection
+  if(model_name == 'backward_selection') {
+    model_df = mc_simulation_parallel(model_df_func, 
+                                     num_params = num_params, 
+                                     num_params_scene10 = num_params_scene10, 
+                                     madr_bin = TRUE,  # Skip scenario 10
+                                     total_sim = num_sim)
+  } else {
+    model_df = mc_simulation_parallel(model_df_func, 
+                                     num_params = num_params, 
+                                     num_params_scene10 = num_params_scene10, 
+                                     madr_bin = FALSE,  # Include all scenarios
+                                     total_sim = num_sim)
+  }
+  # Save results
   new_file = paste0(model_name, '_df_', num_params, 'var_', num_sim,'.rdata')
   assign(paste0(model_name, '_df_', num_params, 'var_', num_sim,'_df_1000'), model_df)
   save(list = paste0(model_name, '_df_', num_params, 'var_', num_sim,'_df_1000'), file = new_file)
@@ -336,9 +477,9 @@ for (model_name in models){
   } else {
     print(paste0(model_name, " Done - Moving on to next model..."))
   }
-  
 }
 
+stopCluster(cl)
 
 # ## --- NON-PARALLEL VERSION --- ##
 
