@@ -352,14 +352,143 @@ backward_selection_model = function(dataframe){
 }
 ```
 
-
-# Testing backward selection
 ```{r}
-# Test for backward selection only
-models = c('backward_selection')
+# ----- ## MODEL 7: SIS LASSO ## -----
+sis_lasso_model = function(dataframe){
+  D = component_splitter(dataframe)[['treatment']]   # Treatment variable (D)
+  X = component_splitter(dataframe)[['X_df']]        # Covariates (X)
+  Y = component_splitter(dataframe)[['outcome']]     # Outcome variable (Y)
+  
+  # Create dataframes for modeling
+  full_df = as.data.frame(cbind(X, treatment = D, outcome = Y))
+  treat_df = full_df[D == 1, ]
+  control_df = full_df[D == 0, ]
+  
+  # STEP 1: SIS for treatment model
+  # Calculate univariate correlations for screening
+  p = ncol(X)
+  treatment_cors = numeric(p)
+  for (j in 1:p) {
+    treatment_cors[j] = abs(cor(X[, j], D))
+  }
+  
+  # Select top d variables (using sqrt(n) as a rule)
+  d = min(ceiling(sqrt(nrow(full_df))), p)
+  selected_vars_idx = order(treatment_cors, decreasing = TRUE)[1:d]
+  selected_vars = colnames(X)[selected_vars_idx]
+  
+  # LASSO on selected variables for treatment model
+  X_selected = X[, selected_vars_idx]
+  cv_fit = cv.glmnet(X_selected, D, family = "binomial", alpha = 1)
+  beta = as.vector(coef(cv_fit, s = "lambda.min"))[-1]  # exclude intercept
+  
+  # Get final selected variables after LASSO
+  treatment_var = selected_vars[abs(beta) > 0]
+  
+  # Create formula for final model
+  if (length(treatment_var) > 0) {
+    treatment_formula = as.formula(paste("treatment ~", paste(treatment_var, collapse = " + ")))
+    treatment_model = glm(treatment_formula, data = full_df, family = binomial)
+  } else {
+    treatment_model = glm(treatment ~ 1, data = full_df, family = binomial)
+    treatment_var = NA
+  }
+  
+  # Get propensity scores
+  pi_hat = predict(treatment_model, type = "response", newdata = full_df)
+  # Trim propensity scores to avoid extreme values
+  pi_hat = pmax(pmin(pi_hat, 0.99), 0.01)
+  
+  # STEP 2: SIS for outcome models
+  # Treated group
+  treat_cors = numeric(p)
+  for (j in 1:p) {
+    treat_cors[j] = abs(cor(X[D == 1, j], Y[D == 1]))
+  }
+  
+  # Select top d variables for treated
+  d_treat = min(ceiling(sqrt(nrow(treat_df))), p)
+  selected_treat_idx = order(treat_cors, decreasing = TRUE)[1:d_treat]
+  selected_treat_vars = colnames(X)[selected_treat_idx]
+  
+  # LASSO on selected variables for treated outcome
+  X_treat_selected = X[D == 1, selected_treat_idx]
+  cv_treat = cv.glmnet(X_treat_selected, Y[D == 1], alpha = 1)
+  beta_treat = as.vector(coef(cv_treat, s = "lambda.min"))[-1]  # exclude intercept
+  
+  # Get final selected variables for treated after LASSO
+  outcome_var_treat = selected_treat_vars[abs(beta_treat) > 0]
+  
+  # Control group
+  control_cors = numeric(p)
+  for (j in 1:p) {
+    control_cors[j] = abs(cor(X[D == 0, j], Y[D == 0]))
+  }
+  
+  # Select top d variables for control
+  d_control = min(ceiling(sqrt(nrow(control_df))), p)
+  selected_control_idx = order(control_cors, decreasing = TRUE)[1:d_control]
+  selected_control_vars = colnames(X)[selected_control_idx]
+  
+  # LASSO on selected variables for control outcome
+  X_control_selected = X[D == 0, selected_control_idx]
+  cv_control = cv.glmnet(X_control_selected, Y[D == 0], alpha = 1)
+  beta_control = as.vector(coef(cv_control, s = "lambda.min"))[-1]  # exclude intercept
+  
+  # Get final selected variables for control after LASSO
+  outcome_var_control = selected_control_vars[abs(beta_control) > 0]
+  
+  # Create formulas for final outcome models
+  if (length(outcome_var_treat) > 0) {
+    treat_formula = as.formula(paste("outcome ~", paste(outcome_var_treat, collapse = " + ")))
+    outcome_model_treat = lm(treat_formula, data = treat_df)
+  } else {
+    outcome_model_treat = lm(outcome ~ 1, data = treat_df)
+  }
+  
+  if (length(outcome_var_control) > 0) {
+    control_formula = as.formula(paste("outcome ~", paste(outcome_var_control, collapse = " + ")))
+    outcome_model_control = lm(control_formula, data = control_df)
+  } else {
+    outcome_model_control = lm(outcome ~ 1, data = control_df)
+  }
+  
+  # Combine all selected outcome variables
+  outcome_var = unique(c(outcome_var_treat, outcome_var_control))
+  if (length(outcome_var) == 0) {
+    outcome_var = NA
+  }
+  
+  # Generate predictions
+  mu_hat_1 = predict(outcome_model_treat, newdata = full_df)  
+  mu_hat_0 = predict(outcome_model_control, newdata = full_df)
+
+  # Calculate doubly robust estimate
+  dr_estimate = mean(((D * Y) / pi_hat) - ((1 - D) * Y / (1 - pi_hat)) - 
+                    ((D - pi_hat) / pi_hat) * mu_hat_1 - 
+                    ((D - pi_hat) / (1 - pi_hat)) * mu_hat_0)
+  
+  # Return results
+  final_lst = list(ate_est = dr_estimate, 
+                   treatment_var = treatment_var,
+                   outcome_var = outcome_var)
+  return(final_lst)
+}
+```
+
+
+# Testing SIS LASSO
+```{r}
+# Test on a single scenario first
+test_scenario = overall_scenario_generator(num_params = 5, num_params_scene10 = 10)$scenario_1
+test_result = sis_lasso_model(test_scenario)
+print(test_result)
+
+# Test with a small simulation
+models = c('sis_lasso')
 num_sim = 10  # Reduced for testing
 num_params = 5
-num_params_scene10 = 50  # This won't be used for backward_selection
+num_params_scene10 = 50  # Not used if skipping scenario 10
 
 # Set up parallel processing
 library(parallel)
@@ -373,11 +502,11 @@ registerDoParallel(cl)
 for (model_name in models){
   model_df_func = get(paste0(model_name,'_model'))
   
-  # Always set madr_bin = TRUE for backward_selection to skip scenario 10
+  # Always set madr_bin = TRUE for sis_lasso to skip scenario 10
   model_df = mc_simulation_parallel(model_df_func, 
                                    num_params = num_params, 
                                    num_params_scene10 = num_params_scene10, 
-                                   madr_bin = TRUE,  # This will skip scenario 10
+                                   madr_bin = TRUE,  # Skip scenario 10
                                    total_sim = num_sim)
   
   # Print a sample of the results to check
@@ -444,8 +573,8 @@ mc_simulation_parallel = function(df_func, num_params, num_params_scene10, madr_
   return(df_final)
 }
 
-#models = c('rlasso','saturated','glider','adaptive_lasso','madr','backward_selection')
-models = c('backward_selection')
+#models = c('rlasso','saturated','glider','adaptive_lasso','madr','backward_selection','sis_lasso')
+models = c('sis_lasso')
 num_sim = 1000
 num_params = 5
 num_params_scene10 = 1000
