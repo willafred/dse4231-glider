@@ -1,24 +1,7 @@
----
-title: "DSE4231_notes"
-output: html_document
-date: "2025-03-09"
----
 
-# Description of coding file
-This file details the process of generation of the various datasets for the project itself. Each code chunk describes the process of generation for a specific scenario. 
-
-# Differences from the paper
-For our project, we decided to test out both nonlinear AND linear forms for the outcome variable. We will be preserving the first 10 scenarios in the paper. However, we will be incorporating additional scenarios 11 to 13, where more complicated nonlinear trigonometric functions are applied into the equation for 11 and 12, while 13 will include categorical variables.
-
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
-rm(list=ls())
 library(tidyverse)
-```
 
 # Overall function to generate dataframe
-
-```{r}
 
 df_generator = function(n, p, sigma, treatment_eqn, outcome_eqn) {
   # Generate covariates
@@ -265,7 +248,7 @@ overall_scenario_generator = function(num_params, num_params_scene10){
     
     X_df = as.data.frame(X_full)
     colnames(X_df) = c(paste0("X", 1:ncol(Xorig)), paste0("Cat", 1:ncol(cat_matrix)))
-  
+    
     # Compute treatment probabilities
     P = treatment_eqn(X_df)
     
@@ -315,4 +298,3 @@ overall_scenario_generator = function(num_params, num_params_scene10){
   )
   return(combined_scenarios)
 }
-```

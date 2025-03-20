@@ -12,16 +12,31 @@ This file details the process of generation of the benchmark models (rLASSO and 
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-library(MASS) 
-library(glmnet) 
-library(mgcv) 
-library(boot)
-library(randomForest)
-library(hdm)
-library(glmnet)
-library(caret)
-library(tidyverse)
+rm(list=ls())
+packages = c("MASS", "glmnet", "boot", 
+             "randomForest", "hdm", "caret", 
+              "tidyverse", "doParallel", "foreach")
 
+# Function to check, install if needed, and load libraries
+install_and_load = function(pkg) {
+  if (!require(pkg, character.only = TRUE)) {
+    install.packages(pkg, dependencies = TRUE)
+    library(pkg, character.only = TRUE)
+  }
+}
+
+# Apply function to all packages
+sapply(packages, install_and_load)
+```
+
+# Relevant Model Functions
+
+```{r}
+# Load all GLiDeR functions
+source("glider_fn.R")
+source("data_sim_fn.R")
+
+# Splitting function to split dataframe into treatment, outcome and X covariates
 component_splitter = function(df){
   treatment = df$treatment
   outcome = df$outcome
@@ -29,11 +44,6 @@ component_splitter = function(df){
   return(list(treatment = treatment, outcome = outcome, X_df = X_df))
 }
 
-```
-
-## Method 1: Regularized LASSO
-
-```{r}
 # ----- ## MODEL 1: SATURATED MODEL ## -----
 
 saturated_model = function(dataframe){
@@ -50,7 +60,8 @@ saturated_model = function(dataframe){
   outcome_model_control = lm(outcome ~ ., data = dataframe[D == 0, ]) # μ(0, X)
   
   mu_hat_1 = predict(outcome_model_treat, newdata = dataframe)  
-  mu_hat_0 = predict(outcome_model_control, newdata = dataframe)  
+  mu_hat_0 = predict(outcome_model_control, newdata = dataframe)
+  
   # STEP 3: Compute the doubly robust estimator
   n = nrow(dataframe)
   
@@ -129,7 +140,7 @@ rlasso_model = function(dataframe){
 
 #----- ## MODEL 3: MADR MODEL BY CEFALU (2016) ## -----
 
-madr_estimator = function(dataframe) {
+madr_model = function(dataframe) {
   
   D = component_splitter(dataframe)[['treatment']]   # Treatment variable (D)
   X = component_splitter(dataframe)[['X_df']]        # Covariates (X)
@@ -179,16 +190,16 @@ madr_estimator = function(dataframe) {
   ate_rf_logit = compute_double_robust(Y, D, ps_logit, 
                                         rf_predictions_treated, rf_predictions_untreated)
   
-  ate_gam_logit = compute_double_robust(Y, D, ps_logit, 
-                                        lm_predictions_treated, gam_predictions_untreated)
+  ate_lm_logit = compute_double_robust(Y, D, ps_logit, 
+                                        lm_predictions_treated, lm_predictions_untreated)
   
   ate_rf_probit = compute_double_robust(Y, D, ps_probit, 
                                         rf_predictions_treated, rf_predictions_untreated)
   
-  ate_gam_probit = compute_double_robust(Y, D, ps_probit, 
-                                        lm_predictions_treated, gam_predictions_untreated)
+  ate_lm_probit = compute_double_robust(Y, D, ps_probit, 
+                                        lm_predictions_treated, lm_predictions_untreated)
   # Averaging the ATEs from both treatment models (logit and probit)
-  ate_madr = (ate_gam_logit + ate_rf_logit + ate_gam_probit + ate_rf_probit) / 4
+  ate_madr = (ate_lm_logit + ate_rf_logit + ate_lm_probit + ate_rf_probit) / 4
 
   return(list(ate_est = ate_madr, 
               treatment_var = NA,
@@ -197,7 +208,7 @@ madr_estimator = function(dataframe) {
 
 #----- ## MODEL 4: GLIDER FUNCTION ## -----
 
-glider_est = function(dataframe){
+glider_model = function(dataframe){
   D = component_splitter(dataframe)[['treatment']]   # Treatment variable (D)
   X = component_splitter(dataframe)[['X_df']]        # Covariates (X)
   Y = component_splitter(dataframe)[['outcome']]     # Outcome variable (Y)
@@ -263,36 +274,99 @@ adaptive_lasso_model = function(dataframe){
 # Running of Models under different scenarios
 ```{r}
 
-mc_simulation = function(df_func, num_params, num_params_scene10, madr_bin = F, total_sim){
+num_cores = detectCores() - 1
+cl = makeCluster(num_cores)
+registerDoParallel(cl)
+
+mc_simulation_parallel = function(df_func, num_params, num_params_scene10, madr_bin = FALSE, total_sim) {
   df_final = data.frame(scenario = 1:13)
-  for (sim_num in 1:total_sim){ # number of simulations
+  if (madr_bin) {
+    df_final = df_final[df_final$scenario != 10, ]
+  }
+  
+  # Set up parallel backend
+  num_cores = detectCores() - 1
+  cl = makeCluster(num_cores)
+  registerDoParallel(cl)
+  results = foreach(sim_num = 1:total_sim, 
+                    .combine = cbind, 
+                    .packages = c("dplyr","MASS","glmnet","boot","randomForest","hdm","glmnet","caret"), 
+                    .export = c("overall_scenario_generator", "df_func", "df_generator", "component_splitter",
+                                "outgradient", "outgradient_scalar", "trtgradient", "trtgradient_scalar",
+                                "negsumgrad", "negsumgrad_scalar", "algorithm1", "groupLassoAlgo",
+                                "GLiDeR")) %dopar% {
     scenarios_lst = overall_scenario_generator(num_params = num_params, num_params_scene10 = num_params_scene10)
-    ate_est_vec = c()
-    for (scene_num in 1:13){
-      if (scene_num == 10){
-        # next
-        if (madr_bin == T){
-          next
-        }
+    ate_est_vec = numeric()
+    
+    for (scene_num in 1:13) {
+      if (scene_num == 10 && madr_bin) {
+        next
       }
-      print(paste0("Scenario ",scene_num," with ", num_params, " variables in progress..."))
+      print(paste0("Scenario ", scene_num, " with ", num_params, " variables in progress..."))
       scenario_name = paste0("scenario_", scene_num)
       scenario_df = scenarios_lst[[scenario_name]]
       df_loop_lst = df_func(scenario_df)
       ate_est_vec = c(ate_est_vec, df_loop_lst$ate_est)
     }
-    df_final[[paste0("sim_", sim_num)]] = ate_est_vec
+    return(ate_est_vec)
   }
+  
+  stopCluster(cl) # Stop parallel backend
+  
+  colnames(results) = paste0("sim_", 1:total_sim)
+  df_final = cbind(df_final, results)
+  
   return(df_final)
 }
 
+models = c('rlasso','saturated','glider','adaptive_lasso','madr')
+num_sim = 1000
+num_params = 5
+num_params_scene10 = 1000
 
-rlasso_df = mc_simulation(rlasso_model, num_params = 5, num_params_scene10 = 100, total_sim = 100)
-saturated_df = mc_simulation(saturated_model, num_params = 5, num_params_scene10 = 100, total_sim = 100)
-adaptive_lasso_df = mc_simulation(adaptive_lasso_model, num_params = 5, num_params_scene10 = 100, total_sim = 100)
-glider_df = mc_simulation(glider_est, num_params = 5, num_params_scene10 = 100, total_sim = 100)
-madr_df = mc_simulation(madr_estimator, num_params = 5, num_params_scene10 = 100, madr_bin = T, total_sim = 100)
+for (model_name in models){
+  model_df_func = get(paste0(model_name,'_model'))
+  model_df = mc_simulation_parallel(model_df_func, num_params = num_params, num_params_scene10 = num_params_scene10, total_sim = 1000)
+  new_file = paste0(model_name, '_df_', num_params, 'var_', num_sim,'.rdata')
+  assign(paste0(model_name, '_df_', num_params, 'var_', num_sim,'_df_1000'), model_df)
+  save(list = paste0(model_name, '_df_', num_params, 'var_', num_sim,'_df_1000'), file = new_file)
+  
+  if (model_name == models[length(models)]){
+    print("All Models Done!")
+  } else {
+    print(paste0(model_name, " Done - Moving on to next model..."))
+  }
+  
+}
 
+
+# ## --- NON-PARALLEL VERSION --- ##
+
+# mc_simulation = function(df_func, num_params, num_params_scene10, madr_bin = F, total_sim){
+#   df_final = data.frame(scenario = 1:13)
+#   if (madr_bin == T){
+#     df_final = df_final %>% filter(scenario!=10)
+#   }
+#   for (sim_num in 1:total_sim){ # number of simulations
+#     scenarios_lst = overall_scenario_generator(num_params = num_params, num_params_scene10 = num_params_scene10)
+#     ate_est_vec = c()
+#     for (scene_num in 1:13){
+#       if (scene_num == 10){
+#         # next
+#         if (madr_bin == T){
+#           next
+#         }
+#       }
+#       print(paste0("Scenario ",scene_num," with ", num_params, " variables in progress..."))
+#       scenario_name = paste0("scenario_", scene_num)
+#       scenario_df = scenarios_lst[[scenario_name]]
+#       df_loop_lst = df_func(scenario_df)
+#       ate_est_vec = c(ate_est_vec, df_loop_lst$ate_est)
+#     }
+#     df_final[[paste0("sim_", sim_num)]] = ate_est_vec
+#   }
+#   return(df_final)
+# }
 ```
 
 # Computation of Error (old)
