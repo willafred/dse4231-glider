@@ -528,7 +528,7 @@ stopCluster(cl)
 # Running of Models under different scenarios
 ```{r}
 
-num_cores = detectCores() - 1
+num_cores = detectCores()
 cl = makeCluster(num_cores)
 registerDoParallel(cl)
 
@@ -573,11 +573,11 @@ mc_simulation_parallel = function(df_func, num_params, num_params_scene10, madr_
   return(df_final)
 }
 
-#models = c('rlasso','saturated','glider','adaptive_lasso','madr','backward_selection','sis_lasso')
+# models = c('rlasso','saturated','glider','adaptive_lasso','madr','backward_selection','sis_lasso')
 models = c('sis_lasso')
 num_sim = 1000
-num_params = 5
-num_params_scene10 = 1000
+num_params = 10
+num_params_scene10 = 75
 
 for (model_name in models){
   model_df_func = get(paste0(model_name, '_model'))
@@ -597,9 +597,9 @@ for (model_name in models){
                                      total_sim = num_sim)
   }
   # Save results
-  new_file = paste0(model_name, '_df_', num_params, 'var_', num_sim,'.rdata')
-  assign(paste0(model_name, '_df_', num_params, 'var_', num_sim), model_df)
-  save(list = paste0(model_name, '_df_', num_params, 'var_', num_sim), file = new_file)
+  new_file = paste0(model_name, '_df_', num_params, 'var_scene10_', num_params_scene10,'.rdata')
+  assign(paste0(model_name, '_df_', num_params, 'var_scene10_', num_params_scene10), model_df)
+  save(list = paste0(model_name, '_df_', num_params, 'var_scene10_', num_params_scene10), file = new_file)
   
   if (model_name == models[length(models)]){
     print("All Models Done!")

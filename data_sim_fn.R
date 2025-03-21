@@ -14,7 +14,7 @@ df_generator = function(n, p, sigma, treatment_eqn, outcome_eqn) {
   
   # Generate treatment assignment
   treatment = rbinom(n, 1, P)
-  while(length(unique(treatment)) < 2 | sum(treatment == 0) < 5 | sum(treatment == 1) < 5) {
+  while(length(unique(treatment)) < 2 | sum(treatment == 0) < 10 | sum(treatment == 1) < 10) {
     treatment = rbinom(n, 1, P)  # Regenerate treatment
   }
   
