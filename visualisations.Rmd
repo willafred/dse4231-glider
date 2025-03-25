@@ -123,4 +123,209 @@ for (nv in unique_numvar) {
 }
 
 ```
+## Justin's edits for report purposes
+
+### Plotting the Bias by Scenario and Model for each number of variables
+```{r}
+# Ensure scenario is a factor
+df_master <- df_master %>%
+  mutate(
+    scenario = factor(scenario),
+    num_var = factor(num_var, levels = c(5, 10, 25))  # set order if needed
+  )
+
+# Rename facet labels
+facet_labels <- c(
+  "5" = "5 Variables",
+  "10" = "10 Variables",
+  "25" = "25 Variables"
+)
+
+# Combined plot
+p <- ggplot(df_master, aes(x = scenario, y = bias_mc, color = model, group = model)) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 1.8) +
+  facet_wrap(~ num_var, ncol = 1, labeller = labeller(num_var = facet_labels)) +
+  scale_y_continuous(limits = c(-4, 4)) +
+  labs(
+    title = "Bias by Scenario and Model",
+    x = "Scenario",
+    y = "Bias",
+    color = "Model"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    legend.margin = margin(t = -5, b = 0),            
+    legend.box.margin = margin(t = -5),               
+    legend.title = element_text(size = 9),
+    legend.text = element_text(size = 8),
+    
+    strip.text = element_text(size = 11, face = "bold", margin = margin(b = 2)),
+    axis.text = element_text(size = 9),
+    axis.title = element_text(size = 10),
+    
+    panel.spacing = unit(0.4, "lines"),               
+    plot.title = element_text(hjust = 0.5, size = 13, margin = margin(b = 5)),
+    plot.margin = margin(t = 5, r = 5, b = 5, l = 5)   
+  )
+
+# Show plot
+print(p)
+
+ggsave("consolidated_bias_facet_plot.png", plot = p, width = 10, height = 6, dpi = 300)
+
+
+```
+
+### Plotting the Heatmap to make it prettier
+```{r}
+
+# Set a consistent max value for the color scale (e.g., based on full dataset)
+max_log_mse <- max(log1p(df_master$mse_ratio), na.rm = TRUE)
+
+# Rename plot labels
+facet_labels <- c(
+  "5" = "5 Variables",
+  "10" = "10 Variables",
+  "25" = "25 Variables"
+)
+
+# reorder model factor by average performance
+model_order <- df_master %>%
+  group_by(model) %>%
+  summarise(mean_mse = mean(mse_ratio, na.rm = TRUE)) %>%
+  arrange(mean_mse) %>%
+  pull(model)
+
+df_master$model <- factor(df_master$model, levels = model_order)
+
+# Create the heatmap
+p <- ggplot(df_master,aes(x = factor(scenario), y = model, fill = log1p(mse_ratio))) +
+  geom_tile(color = "white") +
+  # Optional: Add value labels
+  # geom_text(aes(label = round(mse_ratio, 1)), size = 3, color = "black") +
+  facet_wrap(~ num_var, nrow = 1, labeller = labeller(num_var = facet_labels)) +
+  scale_fill_gradient(low = "white", high = "blue", limits = c(0, max_log_mse), na.value = "white") +
+  labs(
+    title = "Log MSE Ratio Heatmap across Models, Scenarios, and Variable Counts",
+    x = "Scenario",
+    y = "Model",
+    fill = "log(1 + MSE Ratio)"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    strip.text = element_text(size = 12, face = "bold"),
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold")
+  )
+
+print(p)
+
+ggsave("mse_heatmap.png", plot = p, width = 12, height = 4, dpi = 300)
+
+```
+
+
+
+
+### Plotting the Heatmap to make it prettier
+```{r}
+library(ggplot2)
+library(dplyr)
+library(plotly)
+
+# Preprocess for custom hover labels
+df_master <- df_master %>%
+  mutate(
+    scenario = factor(scenario),
+    log_mse_ratio = log1p(mse_ratio),
+    hover_text = paste0(
+      "Model: ", model, "<br>",
+      "Scenario: ", scenario, "<br>",
+      "log(1 + MSE Ratio): ", round(log_mse_ratio, 2), "<br>",
+      "Model MSE: ", round(mse_mc, 4), "<br>",
+      "Saturated MSE: ", round(saturated_mse_mc, 4)
+    )
+  )
+
+# Set facet labels
+facet_labels <- c("5" = "5 Variables", "10" = "10 Variables", "25" = "25 Variables")
+
+# Set max color scale
+max_log_mse <- max(df_master$log_mse_ratio, na.rm = TRUE)
+
+# Reorder model levels
+model_order <- df_master %>%
+  group_by(model) %>%
+  summarise(mean_mse = mean(mse_ratio, na.rm = TRUE)) %>%
+  arrange(mean_mse) %>%
+  pull(model)
+
+df_master$model <- factor(df_master$model, levels = model_order)
+
+# Base ggplot
+p <- ggplot(df_master, aes(x = scenario, y = model, fill = log_mse_ratio, text = hover_text)) +
+  geom_tile(color = "white") +
+  facet_wrap(~ num_var, nrow = 1, labeller = labeller(num_var = facet_labels)) +
+  scale_fill_gradient(low = "white", high = "blue", limits = c(0, max_log_mse), na.value = "white") +
+  labs(
+    title = "Interactive Log MSE Ratio Heatmap",
+    x = "Scenario",
+    y = "Model",
+    fill = "log(1 + MSE Ratio)"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    strip.text = element_text(size = 12, face = "bold"),
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold")
+  )
+
+# Convert to plotly and set tooltip to use custom hover_text
+interactive_plot <- ggplotly(p, tooltip = "text")
+
+# Show interactive plot
+interactive_plot
+
+```
+
+### boxplot
+```{r}
+ggplot(df_master, aes(x = model, y = sd_mc, fill = model)) +
+  geom_boxplot() +
+  facet_wrap(~ num_var, labeller = labeller(num_var = facet_labels)) +
+  labs(
+    title = "Distribution of Monte Carlo SD across Scenarios",
+    x = "Model",
+    y = "MC SD"
+  ) +
+  theme_minimal()
+```
+
+### Violin plot
+```{r}
+violin = ggplot(df_master, aes(x = model, y = sd_mc, fill = model)) +
+  geom_violin(trim = FALSE, alpha = 0.7) +
+  facet_wrap(~ num_var, labeller = labeller(num_var = facet_labels)) +
+  labs(
+    title = "Distribution of Monte Carlo SD across Scenarios",
+    x = "Model",
+    y = "MC SD"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "bottom"
+  )
+
+violin
+
+ggsave("mcsd_violin_distribution.png", plot = violin, width = 12, height = 6, dpi = 300)
+```
+
+
+
 
