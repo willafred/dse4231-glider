@@ -1,0 +1,126 @@
+---
+title: "Visualisation of Findings"
+output: html_document
+---
+
+# Visualisation
+This Rmd file will contain the compilation and visualisation of results
+
+## Load the overall results
+```{r}
+library(dplyr)
+library(purrr)
+library(stringr)
+library(ggplot2)
+
+load("mc_ratio_var5_sim1000.rdata")
+load("mcratio_5var_scene10_50.rdata")
+load("mcratio_10var_scene10_75.rdata")
+load("mcratio_25var_scene10_100.rdata")
+
+```
+## Breaking down each rdata file
+```{r}
+str(mcratio_5var_scene10_50)
+```
+### Combine all the files into one main DF, calling it df_master
+
+```{r}
+load_reshape <- function(file_path, num_var, scenario10_num_var){
+  name <- load(file_path)
+  df_list <- get(name)
+  df_combined <- map_df(
+    names(df_list),
+    function(model_name) {
+      df <- df_list[[model_name]]
+      df_renamed <- df %>%
+        rename_with(
+          ~ str_replace(., paste0(model_name, "_"), ""),  # remove "modelname_" prefix
+          ends_with("_mc")
+        )
+      
+      df_renamed %>%
+        mutate(
+          model = model_name,
+          num_var = num_var,
+          scenario10_num_var = scenario10_num_var
+        )
+    }
+  )
+  
+  return(df_combined)
+}
+
+df_5_50 <- load_reshape(
+  file_path = "mcratio_5var_scene10_50.rdata",
+  num_var = 5,
+  scenario10_num_var = 50
+)
+
+df_10_75 <- load_reshape(
+  file_path = "mcratio_10var_scene10_75.rdata",
+  num_var = 10,
+  scenario10_num_var = 75
+)
+
+df_25_100 <- load_reshape(
+  file_path = "mcratio_25var_scene10_100.rdata",
+  num_var = 25,
+  scenario10_num_var = 100
+)
+
+df_master <- bind_rows(df_5_50, df_10_75, df_25_100)
+```
+
+```{r}
+str(df_master)
+```
+
+### Plotting the Bias by Scenario and Model for each number of variables
+```{r}
+df_master <- df_master %>%
+  mutate(scenario = factor(scenario))
+
+unique_numvar <- unique(df_master$num_var)
+
+for (nv in unique_numvar) {
+  df_temp <- df_master %>% filter(num_var == nv)
+    p <- ggplot(df_temp, aes(x = scenario, y = bias_mc, color = model, group = model)) +
+    geom_line() +
+    geom_point() +
+    scale_y_continuous(limits = c(-4,4))+
+    theme_minimal() +
+    labs(
+      title = paste("Bias by Scenario and Model (num_var =", nv, ")"),
+      x = "Scenario",
+      y = "Bias"
+    )
+  print(p)
+}
+```
+
+### Plotting the Heatmap, does not perform well here though
+```{r}
+unique_numvar <- unique(df_master$num_var)
+
+for (nv in unique_numvar) {
+  df_temp <- df_master %>% filter(num_var == nv)
+  
+  p <- ggplot(df_temp, aes(x = scenario, y = model, fill = mse_ratio)) +
+    geom_tile(color = "white") +
+    facet_wrap(~ scenario10_num_var, ncol = 1) +
+    scale_fill_gradient(low = "white", high = "blue") +
+    labs(
+      title = paste("MSE Ratio Heatmap (num_var =", nv, ")"),
+      x = "Scenario",
+      y = "Model",
+      fill = "MSE Ratio"
+    ) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  
+  print(p)
+}
+
+```
+
