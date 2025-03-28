@@ -472,7 +472,64 @@ sis_lasso_model = function(dataframe){
                    outcome_var = outcome_var)
   return(final_lst)
 }
+
+# ----- ## MODEL 8: SIS GLIDER ## -----
+sis_glider_model = function(dataframe){
+  # Component splitting
+  D = component_splitter(dataframe)[['treatment']]   # Treatment variable (D)
+  X = component_splitter(dataframe)[['X_df']]        # Covariates (X)
+  Y = component_splitter(dataframe)[['outcome']]     # Outcome variable (Y)
+  
+  # SIS for treatment variable selection
+  p_treatment = ncol(X)
+  treatment_cors = numeric(p_treatment)
+  for (j in 1:p_treatment) {
+    treatment_cors[j] = abs(cor(X[, j], D))
+  }
+  
+  # Select top d variables for treatment (using sqrt(n) as a rule)
+  d_treatment = min(ceiling(sqrt(nrow(X))), p_treatment)
+  selected_treatment_vars_idx = order(treatment_cors, decreasing = TRUE)[1:d_treatment]
+  
+  # SIS for outcome variable selection
+  p_outcome = ncol(X)
+  outcome_cors = numeric(p_outcome)
+  for (j in 1:p_outcome) {
+    outcome_cors[j] = abs(cor(X[, j], Y))
+  }
+  
+  # Select top d variables for outcome (using sqrt(n) as a rule)
+  d_outcome = min(ceiling(sqrt(nrow(X))), p_outcome)
+  selected_outcome_vars_idx = order(outcome_cors, decreasing = TRUE)[1:d_outcome]
+  
+  # Subset X with selected variables
+  X_treatment_selected = X[, selected_treatment_vars_idx]
+  X_outcome_selected = X[, selected_outcome_vars_idx]
+  
+  # Run GLiDeR with selected variables
+  params = GLiDeR(X_treatment_selected, Y, D, lambda = NULL)
+  
+  # Extract indices of non-zero alpha and gamma
+  alpha_indices = which(params$alpha != 0)
+  gamma_indices = which(params$gamma != 0)
+  
+  # Map back to original variable indices
+  treatment_var = paste0("X", selected_treatment_vars_idx[alpha_indices], collapse = ", ")
+  outcome_var = paste0("X", selected_outcome_vars_idx[gamma_indices], collapse = ", ")
+  
+  # Create the final list
+  result_list = list(
+    ate_est = params$delta,
+    treatment_var = treatment_var,
+    outcome_var = outcome_var,
+    selected_treatment_vars = selected_treatment_vars_idx,
+    selected_outcome_vars = selected_outcome_vars_idx
+  )
+  return(result_list)
+}
+
 ```
+
 
 # Running of Models under different scenarios
 ```{r}
@@ -522,11 +579,11 @@ mc_simulation_parallel = function(df_func, num_params, num_params_scene10, madr_
   return(df_final)
 }
 
-models = c('rlasso','saturated','glider','adaptive_lasso','madr','backward_selection','sis_lasso')
-# models = c('sis_lasso')
+models = c('sis_glider')
+
 num_sim = 1000
-num_params = 10
-num_params_scene10 = 75
+num_params = 5
+num_params_scene10 = 50
 
 for (model_name in models){
   model_df_func = get(paste0(model_name, '_model'))
@@ -567,6 +624,7 @@ In this object, each element is labelled by its name. Each element is a datafram
 ```{r}
 rm(list=ls())
 models = c('saturated', 'rlasso', 'glider', 'adaptive_lasso', 'madr', 'backward_selection', 'sis_lasso')
+#path = "~/Library/CloudStorage/OneDrive-NationalUniversityofSingapore/Y4S2/DSE4231/dse4231-glider/compiled_data/"
 
 models_df_compiler = function(model_lst, num_var, num_scene10_var){
   compiled_simulations_results = list()
@@ -584,7 +642,7 @@ models_df_compiler = function(model_lst, num_var, num_scene10_var){
 }
 
 # Saving model
-overall_df = models_df_compiler(model_lst = models, num_var = 10, num_scene10_var = 75)
+overall_df = models_df_compiler(model_lst = models, num_var = 5, num_scene10_var = 50)
 
 ```
 
@@ -623,9 +681,9 @@ results_processor = function(df, model_name){
 # --- GENERATION OF MC BIAS, MC SD, MC MSE BASED ON ATE --- #
 
 num_var = 5
-scene10_num = 75
+scene10_num = 50
 models = c('saturated', 'rlasso', 'glider', 'adaptive_lasso', 'madr', 'backward_selection', 'sis_lasso')
-load("overall_10var_scene10_75_simulations.rdata")
+load("overall_25var_scene10_100_simulations.rdata")
 
 overall_df_processing_fn = function(simulations_df, num_var, scene10_num, models_lst){
   
@@ -677,6 +735,6 @@ overall_df_processing_fn = function(simulations_df, num_var, scene10_num, models
   return(get(compiled_name))
 }
 
-x = overall_df_processing_fn(overall_10var_scene10_75_simulations, num_var=10, scene10_num = 75, models_lst = models)
+x = overall_df_processing_fn(overall_25var_scene10_100_simulations, num_var=5, scene10_num = 50, models_lst = models)
 
 ```
