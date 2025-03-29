@@ -169,7 +169,7 @@ p <- ggplot(df_master, aes(x = scenario, y = bias_mc, color = model, group = mod
     legend.title = element_text(size = 14, face = "bold"),
     legend.text = element_text(size = 12),
     
-    strip.text = element_text(size = 11, face = "bold", margin = margin(b = 2)),
+    strip.text = element_text(size = 14, face = "bold", margin = margin(b = 2)),
     axis.text = element_text(size = 12),
     axis.title = element_text(size = 14, face = "bold"),
     
@@ -228,13 +228,13 @@ p <- ggplot(df_master,aes(x = factor(scenario), y = model, fill = log1p(mse_rati
     axis.text.x = element_text(angle = 45, hjust = 1, size = 12),
     axis.text.y = element_text(size = 12),
     axis.title = element_text(size = 14, face = "bold"),
-    strip.text = element_text(size = 12, face = "bold"),
+    strip.text = element_text(size = 14, face = "bold"),
     plot.title = element_text(hjust = 0.5, size = 16, face = "bold")
   )
 
 print(p)
 
-ggsave("mse_heatmap_290325.png", plot = p, width = 15, height = 6, dpi = 300)
+ggsave("mse_heatmap_290325.png", plot = p, width = 15, height = 8, dpi = 300)
 
 ```
 
@@ -339,6 +339,7 @@ violin = ggplot(df_master, aes(x = model, y = sd_mc, fill = model)) +
     axis.title = element_text(size = 14, face = "bold"),
     legend.position = "bottom",
     legend.title = element_text(size = 14, face = "bold"),
+    strip.text = element_text(size = 18, face = "bold", margin = margin(b = 2)),
     legend.text = element_text(size = 12),
     legend.background = element_rect(color = "black", fill = NA, linewidth = 1)
   )
