@@ -198,6 +198,7 @@ madr_model = function(dataframe) {
   
   ate_lm_probit = compute_double_robust(Y, D, ps_probit, 
                                         lm_predictions_treated, lm_predictions_untreated)
+  
   # Averaging the ATEs from both treatment models (logit and probit)
   ate_madr = (ate_lm_logit + ate_rf_logit + ate_lm_probit + ate_rf_probit) / 4
 
@@ -582,13 +583,13 @@ mc_simulation_parallel = function(df_func, num_params, num_params_scene10, madr_
 models = c('sis_glider')
 
 num_sim = 1000
-num_params = 5
-num_params_scene10 = 50
+num_params = 25
+num_params_scene10 = 100
 
 for (model_name in models){
   model_df_func = get(paste0(model_name, '_model'))
   
-  # Always skip scenario 10 for backward_selection
+  # Always skip scenario 10 for backward_selection if backward selection or MADR
   if(model_name == 'backward_selection' | model_name == "madr") {
     model_df = mc_simulation_parallel(model_df_func, 
                                      num_params = num_params, 
@@ -623,7 +624,7 @@ In this object, each element is labelled by its name. Each element is a datafram
 
 ```{r}
 rm(list=ls())
-models = c('saturated', 'rlasso', 'glider', 'adaptive_lasso', 'madr', 'backward_selection', 'sis_lasso')
+models = c('saturated', 'rlasso', 'glider', 'adaptive_lasso', 'madr', 'backward_selection', 'sis_lasso', 'sis_glider')
 #path = "~/Library/CloudStorage/OneDrive-NationalUniversityofSingapore/Y4S2/DSE4231/dse4231-glider/compiled_data/"
 
 models_df_compiler = function(model_lst, num_var, num_scene10_var){
@@ -642,7 +643,7 @@ models_df_compiler = function(model_lst, num_var, num_scene10_var){
 }
 
 # Saving model
-overall_df = models_df_compiler(model_lst = models, num_var = 5, num_scene10_var = 50)
+overall_df = models_df_compiler(model_lst = models, num_var = 25, num_scene10_var = 100)
 
 ```
 
@@ -682,8 +683,10 @@ results_processor = function(df, model_name){
 
 num_var = 5
 scene10_num = 50
-models = c('saturated', 'rlasso', 'glider', 'adaptive_lasso', 'madr', 'backward_selection', 'sis_lasso')
+models = c('saturated', 'rlasso', 'glider', 'adaptive_lasso', 'madr', 'backward_selection', 'sis_lasso', 'sis_glider')
 load("overall_25var_scene10_100_simulations.rdata")
+load("overall_5var_scene10_50_simulations.rdata")
+load("overall_10var_scene10_75_simulations.rdata")
 
 overall_df_processing_fn = function(simulations_df, num_var, scene10_num, models_lst){
   
@@ -735,6 +738,8 @@ overall_df_processing_fn = function(simulations_df, num_var, scene10_num, models
   return(get(compiled_name))
 }
 
-x = overall_df_processing_fn(overall_25var_scene10_100_simulations, num_var=5, scene10_num = 50, models_lst = models)
+x = overall_df_processing_fn(overall_25var_scene10_100_simulations, num_var=25, scene10_num = 100, models_lst = models)
+x = overall_df_processing_fn(overall_5var_scene10_50_simulations, num_var=5, scene10_num = 50, models_lst = models)
+x = overall_df_processing_fn(overall_10var_scene10_75_simulations, num_var=10, scene10_num = 75, models_lst = models)
 
 ```
