@@ -182,7 +182,7 @@ p <- ggplot(df_master, aes(x = scenario, y = bias_mc, color = model, group = mod
 # Show plot
 print(p)
 
-ggsave("consolidated_bias_facet_plot_290325.png", plot = p, width = 10, height = 6, dpi = 300)
+ggsave("consolidated_bias_facet_plot_290325.png", plot = p, width = 10, height = 8, dpi = 300)
 
 
 ```
