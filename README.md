@@ -1,4 +1,4 @@
-# Comparative Study for the use of GLiDeR on Simulated Data (DSE4231)
+# Evaluating the GLiDeR Model: A Comparative Study on Simulated Datasets (DSE4231)
 
 The table below describes the folders and coding files
 
