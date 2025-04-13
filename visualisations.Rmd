@@ -13,7 +13,6 @@ library(purrr)
 library(stringr)
 library(ggplot2)
 
-load("mc_ratio_var5_sim1000.rdata")
 load("mcratio_5var_scene10_50.rdata")
 load("mcratio_10var_scene10_75.rdata")
 load("mcratio_25var_scene10_100.rdata")
@@ -82,9 +81,9 @@ df_master <- df_master %>%
   mutate(scenario = factor(scenario)) %>%
   mutate(model = recode(model,
                          madr = "MADR",
-                         sis_lasso = "SiS Lasso",
+                         sis_lasso = "SIS Lasso",
                          backward_selection = "Backward Selection",
-                         sis_glider = "SiS GLiDeR",
+                         sis_glider = "SIS GLiDeR",
                          adaptive_lasso = "Adaptive Lasso",
                          glider = "GLiDeR",
                          rlasso = "rLasso"))
@@ -248,9 +247,9 @@ library(plotly)
 df_master <- df_master %>%
   mutate(model = recode(model,
                          madr = "MADR",
-                         sis_lasso = "SiS Lasso",
+                         sis_lasso = "SIS Lasso",
                          backward_selection = "Backward Selection",
-                         sis_glider = "SiS GLiDeR",
+                         sis_glider = "SIS GLiDeR",
                          adaptive_lasso = "Adaptive Lasso",
                          glider = "GLiDeR",
                          rlasso = "rLasso")) %>%
