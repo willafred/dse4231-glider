@@ -181,7 +181,7 @@ p <- ggplot(df_master, aes(x = scenario, y = bias_mc, color = model, group = mod
 # Show plot
 print(p)
 
-ggsave("consolidated_bias_facet_plot_290325.png", plot = p, width = 10, height = 12, dpi = 300)
+ggsave("consolidated_bias_facet_plot_290325.png", plot = p, width = 10, height = 10, dpi = 300)
 
 
 ```
@@ -233,7 +233,7 @@ p <- ggplot(df_master,aes(x = factor(scenario), y = model, fill = log1p(mse_rati
 
 print(p)
 
-ggsave("mse_heatmap_290325.png", plot = p, width = 30, height = 15, dpi = 300)
+ggsave("mse_heatmap_290325.png", plot = p, width = 30, height = 12, dpi = 300)
 
 ```
 
@@ -345,5 +345,5 @@ violin = ggplot(df_master, aes(x = model, y = sd_mc, fill = model)) +
 
 violin
 
-ggsave("mcsd_violin_distribution_290325.png", plot = violin, width = 12, height = 9, dpi = 300)
+ggsave("mcsd_violin_distribution_290325.png", plot = violin, width = 12, height = 6, dpi = 300)
 ```
